@@ -3,16 +3,21 @@ package main
 import (
 	"fmt"
 	"os"
+	"github.com/hashicorp/packer/common"
 	"github.com/hashicorp/packer/helper/config"
 	"github.com/hashicorp/packer/packer"
 	"github.com/hashicorp/packer/packer/plugin"
 	"github.com/hashicorp/packer/template/interpolate"
 	"bytes"
-	_ "runtime"
+	"runtime"
+	"errors"
+	shellLocal "github.com/hashicorp/packer/provisioner/shell-local"
 )
 
 // SrvSpeConfig holds the config data coming in from the packer template
 type SrvSpecConfig struct {
+
+	common.PackerConfig `mapstructure:",squash"`
 
 	// provisioner version
 	Version string
@@ -25,6 +30,20 @@ type SrvSpecConfig struct {
 
 	// User For SSH
 	SshUser string `mapstructure:"ssh_user"`
+
+	// The os type (windows or linux) this is only applied if SrvSpecCommand isnt specified
+	OSType string `mapstructure:"os_type"`
+
+	// Should the actual serverspec command be run - or do you just want the ip of the remote host ?
+	RunSrvSpec bool `mapstructure:"run_serverspec"`
+
+	// ExecuteCommand is the command used to execute the command.
+	ExecuteCommand []string `mapstructure:"execute_command"`
+
+	// The Actual ServerSpec command to exist, can be overriden,
+	// if left as-is it will use osType and run different commands
+	// depending if it is windows (untested) or linux
+	SrvSpecCommand string
 
 	ctx interpolate.Context
 }
@@ -50,7 +69,9 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 		Interpolate:        true,
 		InterpolateContext: &p.config.ctx,
 		InterpolateFilter: &interpolate.RenderFilter{
-			Exclude: []string{},
+			Exclude: []string{
+				"execute_command",
+			},
 		},
 	}, raws...)
 	if err != nil {
@@ -73,6 +94,27 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 		p.config.SshUser = "centos"
 	}
 
+	if len(p.config.ExecuteCommand) == 0 {
+		if runtime.GOOS == "windows" {
+			p.config.ExecuteCommand = []string{
+				"cmd",
+				"/C",
+				"{{.Command}}",
+			}
+		} else {
+			p.config.ExecuteCommand = []string{
+				"/bin/sh",
+				"-c",
+				"{{.Command}}",
+			}
+		}
+	}
+
+	if len(p.config.ExecuteCommand) == 0 {
+		errs = packer.MultiErrorAppend(errs,
+			errors.New("execute_command must not be empty"))
+	}
+
 	if errs != nil && len(errs.Errors) > 0 {
 		return errs
 	}
@@ -91,18 +133,19 @@ func (p *Provisioner) Provision(ui packer.Ui, comm packer.Communicator) error {
 	}
 	ui.Message(fmt.Sprintf("Remote Host IP: %s", hostInfo))
 
-	ui.Say("Running ServerSpec tests - Hopefully Soon...")
-	/*
-	if err := p.runSrvSpec(ui, comm, hostInfo); err != nil {
-		return fmt.Errorf("Error running ServerSpec: %s", err)
+	if p.config.RunSrvSpec == true {
+		ui.Say("Running ServerSpec tests")
+		if err := p.runSrvSpec(ui, hostInfo); err != nil {
+			return fmt.Errorf("Error running ServerSpec: %s", err)
+		}
+
 	}
-	*/
+
 	return nil
 }
 
 // Cancel just exists when provision is cancelled
 func (p *Provisioner) Cancel() {
-	os.Exit(0)
 }
 
 // Get Remote Host From Remote Machine
@@ -123,37 +166,51 @@ func (p *Provisioner) getRemoteHostIP(ui packer.Ui, comm packer.Communicator) (s
 	if err := cmd.StartWithUi(comm, ui); err != nil {
 		return "", err
 	}
+	cmd.Wait()
 	if cmd.ExitStatus != 0 {
 		return "", fmt.Errorf("non-zero exit status")
 	}
-	if err := comm.Start(cmd); err != nil {
-		return "", fmt.Errorf("Error :: Running %s :: %s", p.config.CMD, err)
-	}
-	cmd.Wait()
 
 	fmt.Fprintf(file, stdout.String())
 	return stdout.String(), nil
 }
 
 // runSrvSpec runs the ServerSpec tests
-/*
-func (p *Provisioner) runSrvSpec(ui packer.Ui, _ packer.Communicator, hostInfo string) error {
+func (p *Provisioner) runSrvSpec(ui packer.Ui, hostInfo string) error {
+	var stdout bytes.Buffer
 
-	//commandRun :=
-	var execCmd string[]
-	commandRun := fmt.Sprintf("export SSH_USER=%s && cd %s| rake spec TARGET_HOST=%s",
-		p.config.SshUser, p.config.TestSpecsDir, hostInfo)
-
-	execCmd = string[] {
-	"bin/bash",
-	"-c",
-	commandRun
+	if p.config.SrvSpecCommand == "" {
+		if p.config.OSType == "windows" {
+			p.config.SrvSpecCommand = fmt.Sprintf("cd %s && rake spec",
+				p.config.TestSpecsDir)
+		} else {
+			p.config.SrvSpecCommand = fmt.Sprintf("export SSH_USER=%s && cd %s && rake spec TARGET_HOST=%s",
+				p.config.SshUser,
+				p.config.TestSpecsDir,
+				hostInfo)
+		}
 	}
 
-	comm := &Communicator.{
-	Ctx:            p.config.ctx,
-		ExecuteCommand: execCmd
+	comm := &shellLocal.Communicator{
+		Ctx:            p.config.ctx,
+		ExecuteCommand: p.config.ExecuteCommand,
+	}
+
+	cmd := &packer.RemoteCmd{
+		Command: p.config.SrvSpecCommand,
+		Stdout: &stdout,
+	}
+	if err := cmd.StartWithUi(comm, ui); err != nil {
+		return fmt.Errorf( "Error executing: %s\n",
+			p.config.SrvSpecCommand)
+	}
+	fmt.Sprintf("OutPut: %s", stdout.String())
+	cmd.Wait()
+	if cmd.ExitStatus != 0 {
+		return fmt.Errorf("Error :: Code: %d command: %s",
+			cmd.ExitStatus,
+			p.config.SrvSpecCommand)
 	}
 	return nil
 }
-*/
+
