@@ -62,7 +62,7 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 	}
 
 	if p.config.CMD == "" {
-		p.config.CMD = "ip -4 route get 1|head -1|awk '{print $NF}'"
+		p.config.CMD = "sudo hostname -i"
 	}
 
 	if p.config.TestSpecsDir == "" {
@@ -117,7 +117,7 @@ func (p *Provisioner) getRemoteHostIP(ui packer.Ui, comm packer.Communicator) (s
 
 	ui.Message(fmt.Sprintf("Asking Remote Host for: %s", p.config.CMD))
 	cmd := &packer.RemoteCmd{
-		Command: fmt.Sprintf("'%s'", p.config.CMD),
+		Command: fmt.Sprintf("%s", p.config.CMD),
 		Stdout: &stdout,
 	}
 	if err := cmd.StartWithUi(comm, ui); err != nil {
@@ -126,6 +126,11 @@ func (p *Provisioner) getRemoteHostIP(ui packer.Ui, comm packer.Communicator) (s
 	if cmd.ExitStatus != 0 {
 		return "", fmt.Errorf("non-zero exit status")
 	}
+	if err := comm.Start(cmd); err != nil {
+		return "", fmt.Errorf("Error :: Running %s :: %s", p.config.CMD, err)
+	}
+	cmd.Wait()
+
 	fmt.Fprintf(file, stdout.String())
 	return stdout.String(), nil
 }
