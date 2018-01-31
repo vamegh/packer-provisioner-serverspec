@@ -23,9 +23,9 @@ type SrvSpecConfig struct {
 	Version string
 
 	// command to retrieve remote server hostname /ip
-	CMD string
+	CMD string `mapstructure:"remote_host_command"`
 
-	// An array of tests to run.
+	// The location of the serverspec tests
 	TestSpecsDir string `mapstructure:"test_specs_dir"`
 
 	// User For SSH
@@ -43,7 +43,7 @@ type SrvSpecConfig struct {
 	// The Actual ServerSpec command to exist, can be overriden,
 	// if left as-is it will use osType and run different commands
 	// depending if it is windows (untested) or linux
-	SrvSpecCommand string
+	SrvSpecCommand string `mapstructure:"serverspec_command"`
 
 	ctx interpolate.Context
 }
@@ -184,9 +184,9 @@ func (p *Provisioner) runSrvSpec(ui packer.Ui, hostInfo string) error {
 			p.config.SrvSpecCommand = fmt.Sprintf("cd %s && rake spec",
 				p.config.TestSpecsDir)
 		} else {
-			p.config.SrvSpecCommand = fmt.Sprintf("export SSH_USER=%s && cd %s && rake spec TARGET_HOST=%s",
-				p.config.SshUser,
+			p.config.SrvSpecCommand = fmt.Sprintf("cd %s && SSH_USER=%s rake spec TARGET_HOST=%s",
 				p.config.TestSpecsDir,
+				p.config.SshUser,
 				hostInfo)
 		}
 	}
@@ -204,7 +204,7 @@ func (p *Provisioner) runSrvSpec(ui packer.Ui, hostInfo string) error {
 		return fmt.Errorf( "Error executing: %s\n",
 			p.config.SrvSpecCommand)
 	}
-	fmt.Sprintf("OutPut: %s", stdout.String())
+	fmt.Sprintf("Output: %s", stdout.String())
 	cmd.Wait()
 	if cmd.ExitStatus != 0 {
 		return fmt.Errorf("Error :: Code: %d command: %s",
